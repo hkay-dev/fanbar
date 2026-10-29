@@ -44,7 +44,7 @@ export default function App() {
             </div>
           </div>
           <figure className="shot">
-            <img src="/panel.png" alt="The Fanbar panel: fan presets, an rpm slider, the energy mode switch and live readings" width="270" height="393" />
+            <img src="/panel.svg" alt="The Fanbar panel: fan presets, an rpm slider, the energy mode switch and live readings" width="270" height="393" />
           </figure>
         </section>
 
