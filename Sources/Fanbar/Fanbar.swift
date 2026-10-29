@@ -178,9 +178,9 @@ struct Panel: View {
             }
             HStack {
                 Slider(value: $rpm, in: model.range) { editing in
-                    if !editing { model.apply(String(Int(rpm / 50) * 50)) }
+                    if !editing { model.apply(String(Int(rpm))) }
                 }
-                Text("\(Int(rpm / 50) * 50)").monospacedDigit().frame(width: 40, alignment: .trailing)
+                Text("\(Int(rpm))").monospacedDigit().frame(width: 40, alignment: .trailing)
             }
             if model.otherControl {
                 Text("Macs Fan Control is running and will override these.").font(.caption).foregroundStyle(.orange)
