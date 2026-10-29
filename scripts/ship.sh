@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Ship it for Fanbar (written by deckhand app new): builds this commit, signs it with Vesper Self-Signed,
-# installs it in /Applications (SHIP_APP_DIR picks another folder), clears quarantine and records the commit.
+# Ship it for Fanbar (written by deckhand app new): builds this commit, signs it with Vesper Self-Signed
+# (SIGN_IDENTITY picks another certificate, or `-` for ad-hoc), installs it in /Applications (SHIP_APP_DIR picks
+# another folder), clears quarantine and records the commit.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 root=$PWD
 
 name="Fanbar"
 project="fanbar"
-identity="Vesper Self-Signed"
+identity="${SIGN_IDENTITY:-Vesper Self-Signed}"
 dest_dir="${SHIP_APP_DIR:-/Applications}"
 destination="$dest_dir/$name.app"
 record="$root/build/stable-installed-commit"
@@ -22,7 +23,7 @@ commit="$(git rev-parse HEAD)"
 
 echo "::step Check the signing identity"
 echo "ship: checking the $identity signing identity"
-security find-identity -v -p codesigning | grep -Fq "\"$identity\"" ||
+[[ "$identity" == - ]] || security find-identity -v -p codesigning | grep -Fq "\"$identity\"" ||
     fail "the $identity signing identity is missing from the login keychain"
 
 mkdir -p build
