@@ -55,6 +55,9 @@ else
     echo "ship: making the app bundle"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     cp "$bin" "$app/Contents/MacOS/$exe"
+    xcrun actool AppIcon.icon --compile "$app/Contents/Resources" --app-icon AppIcon --platform macosx \
+        --minimum-deployment-target 14.0 --output-partial-info-plist "$stage/icon.plist" >"$stage/actool.log" 2>&1 ||
+        { tail -n 20 "$stage/actool.log" >&2; fail "actool failed to compile AppIcon.icon"; }
     cat >"$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -64,6 +67,8 @@ else
     <key>CFBundleIdentifier</key><string>dev.hkay.$project</string>
     <key>CFBundleName</key><string>$name</string>
     <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>${commit:0:9}</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
