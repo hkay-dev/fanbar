@@ -199,18 +199,19 @@ struct Panel: View {
     @State private var rpm = 2000.0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Fans").bold()
-                Spacer()
-                Text(model.rpm.map(String.init).joined(separator: " / ") + " rpm").monospacedDigit()
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Fans").font(.headline)
+                    Spacer()
+                    Text(model.rpm.map(String.init).joined(separator: " / ") + " rpm").monospacedDigit().foregroundStyle(.secondary)
+                }
+                Text(modeLabel).font(.callout).foregroundStyle(.secondary)
             }
-            Text(modeLabel).font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("Quiet") { model.apply("2000") }
-                Button("Fast") { model.apply("max") }
-                Button("Stock") { model.apply("auto") }
-            }
+            Segments(items: [("Quiet", Self.symbol("tortoise.fill"), "2000"),
+                             ("Fast", Self.symbol("hare.fill"), "max"),
+                             ("Stock", Self.symbol("arrow.counterclockwise"), "auto")],
+                     selection: model.mode) { model.apply($0) }
             HStack {
                 Slider(value: $rpm, in: model.range) { editing in
                     if !editing { model.apply(String(Int(rpm))) }
@@ -218,17 +219,17 @@ struct Panel: View {
                 Text("\(Int(rpm))").monospacedDigit().frame(width: 40, alignment: .trailing)
             }
             if model.otherControl {
-                Text("Macs Fan Control is running and will override these.").font(.caption).foregroundStyle(.orange)
+                Text("Macs Fan Control is running and will override these.").font(.callout).foregroundStyle(.orange)
             }
             Divider()
-            Picker("Energy", selection: Binding(get: { model.energy ?? -1 }, set: { model.setEnergy($0) })) {
-                Text("Low").tag(1)
-                Text("Auto").tag(0)
-                Text("High").tag(2)
-            }
-            .pickerStyle(.segmented)
+            Text("Energy").font(.headline)
+            // The symbols macOS shows for each energy mode in its battery menu.
+            Segments(items: [("Low", Self.symbol("battery.25percent"), 1),
+                             ("Auto", Self.symbol("battery.100percent"), 0),
+                             ("High", Self.symbol("arrowtriangle.right.3.battery.0percent"), 2)],
+                     selection: model.energy) { model.setEnergy($0) }
             Divider()
-            Grid(alignment: .leading, verticalSpacing: 4) {
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
                 row("CPU power", model.cpuW.map { String(format: "%.1f W", $0) })
                 row("P-cores", model.pGHz.map { String(format: "%.2f GHz", $0) })
                 row("S-cores", model.sGHz.map { String(format: "%.2f GHz", $0) })
@@ -237,10 +238,11 @@ struct Panel: View {
                 row("Throttling", model.pressure)
             }
             Divider()
-            Button("Quit") { NSApp.terminate(nil) }
+            Button("Quit Fanbar") { NSApp.terminate(nil) }.keyboardShortcut("q")
         }
-        .padding(12)
-        .frame(width: 250)
+        .padding(14)
+        .frame(width: 270)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { model.start() }
         .onChange(of: model.mode, initial: true) {
             if let n = Double(model.mode) { rpm = n }
@@ -256,10 +258,46 @@ struct Panel: View {
         }
     }
 
+    // Public SF Symbols, or the private ones macOS keeps for its own menus.
+    private static func symbol(_ name: String) -> NSImage? {
+        (NSImage(systemSymbolName: name, accessibilityDescription: nil)
+            ?? NSImage.perform(NSSelectorFromString("imageWithPrivateSystemSymbolName:accessibilityDescription:"), with: name, with: nil)?
+            .takeUnretainedValue() as? NSImage)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+    }
+
     private func row(_ label: String, _ value: String?) -> some View {
         GridRow {
-            Text(label).foregroundStyle(.secondary)
-            Text(value ?? "…").monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing)
+            Text(label).fontWeight(.semibold)
+            Text(value ?? "…").monospacedDigit().foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing)
         }
+    }
+}
+
+// A system segmented control whose segments carry an icon and a title, which SwiftUI's segmented Picker drops on macOS.
+struct Segments<T: Equatable>: NSViewRepresentable {
+    let items: [(String, NSImage?, T)]
+    let selection: T?
+    let pick: (T) -> Void
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(labels: items.map(\.0), trackingMode: .selectOne, target: context.coordinator, action: #selector(Coordinator.changed(_:)))
+        for (i, item) in items.enumerated() { control.setImage(item.1, forSegment: i) }
+        control.segmentDistribution = .fillEqually
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.segments = self
+        control.selectedSegment = items.firstIndex { $0.2 == selection } ?? -1
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject {
+        var segments: Segments
+        init(_ segments: Segments) { self.segments = segments }
+        @objc func changed(_ control: NSSegmentedControl) { segments.pick(segments.items[control.selectedSegment].2) }
     }
 }
