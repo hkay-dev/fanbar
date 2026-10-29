@@ -1,5 +1,6 @@
 import AppKit
 import CSMC
+import IOKit.ps
 import SwiftUI
 
 // `Fanbar --set auto|max|<rpm>` writes the fan keys and exits. The app runs itself that way under `sudo -n`,
@@ -60,6 +61,8 @@ final class Model: ObservableObject {
     @Published var die: Double?
     @Published var battery: Double?
     @Published var otherControl = false
+    // macOS energy mode: 0 Automatic, 1 Low Power, 2 High Power.
+    @Published var energy: Int?
     let range = Fans.range(0)
     private var dieKeys: [String] = [], batteryKeys: [String] = []
     private var timer: Timer?, powermetrics: Process?
@@ -93,9 +96,41 @@ final class Model: ObservableObject {
         return (try? p.run()) == nil ? nil : p
     }
 
+    // Sets the energy mode for the power source in use now, as System Settings does.
+    func setEnergy(_ mode: Int) {
+        energy = mode
+        let source = IOPSGetProvidingPowerSourceType(nil).takeUnretainedValue() as String == kIOPMBatteryPowerKey ? "-b" : "-c"
+        DispatchQueue.global().async {
+            _ = Self.output("/usr/bin/sudo", ["-n", "/usr/bin/pmset", source, "powermode", String(mode)])
+            self.readEnergy()
+        }
+    }
+
+    private func readEnergy() {
+        DispatchQueue.global().async {
+            let mode = Self.output("/usr/bin/pmset", ["-g"])?.split(separator: "\n")
+                .map { $0.split(separator: " ") }
+                .first { $0.first == "powermode" }?.last.flatMap { Int($0) }
+            DispatchQueue.main.async { self.energy = mode }
+        }
+    }
+
+    private static func output(_ path: String, _ args: [String]) -> String? {
+        let p = Process(), pipe = Pipe()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = args
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+
     // Sampling runs only while the panel is open.
     func start() {
         readSMC()
+        readEnergy()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.readSMC() }
         startPowermetrics()
     }
@@ -185,6 +220,13 @@ struct Panel: View {
             if model.otherControl {
                 Text("Macs Fan Control is running and will override these.").font(.caption).foregroundStyle(.orange)
             }
+            Divider()
+            Picker("Energy", selection: Binding(get: { model.energy ?? -1 }, set: { model.setEnergy($0) })) {
+                Text("Low").tag(1)
+                Text("Auto").tag(0)
+                Text("High").tag(2)
+            }
+            .pickerStyle(.segmented)
             Divider()
             Grid(alignment: .leading, verticalSpacing: 4) {
                 row("CPU power", model.cpuW.map { String(format: "%.1f W", $0) })
