@@ -64,14 +64,17 @@ final class Model: ObservableObject {
     // macOS energy mode: 0 Automatic, 1 Low Power, 2 High Power.
     @Published var energy: Int?
     let range = Fans.range(0)
+    private let fans = Fans.count
+    // After launch, every SMC read runs here, off the main thread.
+    private let smc = DispatchQueue(label: "smc")
     private var dieKeys: [String] = [], batteryKeys: [String] = []
     private var timer: Timer?, powermetrics: Process?
 
     init() {
         apply(mode)
-        DispatchQueue.global().async {
-            let die = SMC.keys(prefixes: ["Tp", "Tg", "Tm"]), battery = SMC.keys(prefixes: ["TB"])
-            DispatchQueue.main.async { self.dieKeys = die; self.batteryKeys = battery }
+        smc.async { [self] in
+            dieKeys = SMC.keys(prefixes: ["Tp", "Tg", "Tm"])
+            batteryKeys = SMC.keys(prefixes: ["TB"])
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
@@ -90,10 +93,7 @@ final class Model: ObservableObject {
     }
 
     @discardableResult static func runRoot(_ mode: String) -> Process? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        p.arguments = ["-n", Bundle.main.executablePath!, "--set", mode]
-        return (try? p.run()) == nil ? nil : p
+        launch("/usr/bin/sudo", ["-n", Bundle.main.executablePath!, "--set", mode])
     }
 
     // Sets the energy mode for the power source in use now, as System Settings does.
@@ -101,34 +101,34 @@ final class Model: ObservableObject {
         energy = mode
         let source = IOPSGetProvidingPowerSourceType(nil).takeUnretainedValue() as String == kIOPMBatteryPowerKey ? "-b" : "-c"
         DispatchQueue.global().async {
-            _ = Self.output("/usr/bin/sudo", ["-n", "/usr/bin/pmset", source, "powermode", String(mode)])
+            Self.launch("/usr/bin/sudo", ["-n", "/usr/bin/pmset", source, "powermode", String(mode)])?.waitUntilExit()
             self.readEnergy()
         }
     }
 
     private func readEnergy() {
         DispatchQueue.global().async {
-            let mode = Self.output("/usr/bin/pmset", ["-g"])?.split(separator: "\n")
-                .map { $0.split(separator: " ") }
+            let pipe = Pipe()
+            let out = Self.launch("/usr/bin/pmset", ["-g"], output: pipe) == nil ? "" : String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let mode = out.split(separator: "\n").map { $0.split(separator: " ") }
                 .first { $0.first == "powermode" }?.last.flatMap { Int($0) }
             DispatchQueue.main.async { self.energy = mode }
         }
     }
 
-    private static func output(_ path: String, _ args: [String]) -> String? {
-        let p = Process(), pipe = Pipe()
+    // Starts a command with stderr thrown away, and stdout too unless a pipe takes it.
+    @discardableResult private static func launch(_ path: String, _ args: [String], output: Pipe? = nil) -> Process? {
+        let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
-        p.standardOutput = pipe
+        p.standardOutput = output ?? FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return String(decoding: data, as: UTF8.self)
+        return (try? p.run()) == nil ? nil : p
     }
 
     // Sampling runs only while the panel is open.
     func start() {
+        otherControl = NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.crystalidea.macsfancontrol" }
         readSMC()
         readEnergy()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.readSMC() }
@@ -142,19 +142,16 @@ final class Model: ObservableObject {
     }
 
     private func readSMC() {
-        rpm = (0..<Fans.count).map { Int(SMC.value("F\($0)Ac") ?? 0) }
-        let maxOf = { (keys: [String]) in keys.compactMap(SMC.value).filter { $0 > 1 && $0 < 150 }.max() }
-        die = maxOf(dieKeys)
-        battery = maxOf(batteryKeys)
-        otherControl = NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.crystalidea.macsfancontrol" }
+        smc.async { [self] in
+            let rpm = (0..<fans).map { Int(SMC.value("F\($0)Ac") ?? 0) }
+            let maxOf = { (keys: [String]) in keys.compactMap(SMC.value).filter { $0 > 1 && $0 < 150 }.max() }
+            let die = maxOf(dieKeys), battery = maxOf(batteryKeys)
+            DispatchQueue.main.async { self.rpm = rpm; self.die = die; self.battery = battery }
+        }
     }
 
     private func startPowermetrics() {
-        let p = Process(), pipe = Pipe()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        p.arguments = ["-n", "/usr/bin/powermetrics", "-i", "1000", "-f", "plist", "--samplers", "cpu_power,thermal"]
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
+        let pipe = Pipe()
         var buffer = Data()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let chunk = h.availableData
@@ -167,8 +164,7 @@ final class Model: ObservableObject {
                 DispatchQueue.main.async { self?.update(plist) }
             }
         }
-        try? p.run()
-        powermetrics = p
+        powermetrics = Self.launch("/usr/bin/sudo", ["-n", "/usr/bin/powermetrics", "-i", "1000", "-f", "plist", "--samplers", "cpu_power,thermal"], output: pipe)
     }
 
     private func update(_ plist: [String: Any]) {

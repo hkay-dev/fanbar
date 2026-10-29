@@ -25,11 +25,20 @@ static int call(SMCKeyData *in, SMCKeyData *out) {
     return r == KERN_SUCCESS && out->result == 0 ? 0 : -1;
 }
 
+// A key's size and type never change, so each is asked once. Fanbar reads a few hundred keys at most; the table stays
+// half empty so the probe always ends.
+static struct { uint32_t key; SMCKeyInfo info; } known[1024];
+static int knownCount;
+
 static int info(uint32_t key, SMCKeyInfo *ki) {
+    uint32_t i = key % 1024;
+    while (known[i].key && known[i].key != key) i = (i + 1) % 1024;
+    if (known[i].key) { *ki = known[i].info; return 0; }
     SMCKeyData in = {0}, out = {0};
     in.key = key; in.data8 = 9;
     if (call(&in, &out)) return -1;
     *ki = out.keyInfo;
+    if (knownCount < 512) { known[i].key = key; known[i].info = *ki; knownCount++; }
     return 0;
 }
 
