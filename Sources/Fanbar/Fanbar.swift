@@ -177,10 +177,10 @@ struct Panel: View {
                 Button("Stock") { model.apply("auto") }
             }
             HStack {
-                Slider(value: $rpm, in: model.range, step: 50) { editing in
-                    if !editing { model.apply(String(Int(rpm))) }
+                Slider(value: $rpm, in: model.range) { editing in
+                    if !editing { model.apply(String(Int(rpm / 50) * 50)) }
                 }
-                Text("\(Int(rpm))").monospacedDigit().frame(width: 40, alignment: .trailing)
+                Text("\(Int(rpm / 50) * 50)").monospacedDigit().frame(width: 40, alignment: .trailing)
             }
             if model.otherControl {
                 Text("Macs Fan Control is running and will override these.").font(.caption).foregroundStyle(.orange)
@@ -199,9 +199,9 @@ struct Panel: View {
         }
         .padding(12)
         .frame(width: 250)
-        .onAppear {
+        .onAppear { model.start() }
+        .onChange(of: model.mode, initial: true) {
             if let n = Double(model.mode) { rpm = n }
-            model.start()
         }
         .onDisappear { model.stop() }
     }
