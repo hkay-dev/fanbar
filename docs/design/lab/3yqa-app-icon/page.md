@@ -21,7 +21,7 @@ takes:
 recommended: A
 approve: Install the take he picked
 round: 1
-status: waiting
+status: picked B
 ---
 
 # Which icon should Fanbar have?
