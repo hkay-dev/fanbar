@@ -56,7 +56,9 @@ else
     echo "ship: making the app bundle"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     cp "$bin" "$app/Contents/MacOS/$exe"
-    xcrun actool AppIcon.icon --compile "$app/Contents/Resources" --app-icon AppIcon --platform macosx \
+    # actool hands the job to a shared ibtoold that stays running with the folder of whichever build started it, so it
+    # reads relative paths from there (another app's repo, say). Every path given to it is absolute.
+    xcrun actool "$root/AppIcon.icon" --compile "$app/Contents/Resources" --app-icon AppIcon --platform macosx \
         --minimum-deployment-target 14.0 --output-partial-info-plist "$stage/icon.plist" >"$stage/actool.log" 2>&1 ||
         { tail -n 20 "$stage/actool.log" >&2; fail "actool failed to compile AppIcon.icon"; }
     cat >"$app/Contents/Info.plist" <<PLIST
