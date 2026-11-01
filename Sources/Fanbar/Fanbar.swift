@@ -81,9 +81,11 @@ final class Model: ObservableObject {
             apply(mode)
         }
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.stop()
+            self?.timer?.invalidate()
+            self?.endPowermetrics()
             Self.runRoot("auto")?.waitUntilExit()
         }
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
     }
 
     func apply(_ mode: String) {
@@ -126,17 +128,47 @@ final class Model: ObservableObject {
         return (try? p.run()) == nil ? nil : p
     }
 
-    // Sampling runs only while the panel is open.
+    // Sampling runs while the panel is open or while another app keeps ~/.fanbar/watch fresh (touched in the last 10 s).
+    // One timer ticks every second for the whole life of the app; while neither holds, a tick is a single stat.
+    private static let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".fanbar")
+    private static let watchFile = dir.appendingPathComponent("watch").path
+    private static let readingsFile = dir.appendingPathComponent("readings.json")
+    private static let watchWindow: TimeInterval = 10
+    private var panelOpen = false, sampling = false
+
+    // The freshness rule: the watch file exists and its mtime is within the window.
+    static func isFresh(mtime: Date?, now: Date = Date()) -> Bool {
+        guard let mtime else { return false }
+        return now.timeIntervalSince(mtime) <= watchWindow
+    }
+
+    private var watchFresh: Bool {
+        var st = stat()
+        guard stat(Self.watchFile, &st) == 0 else { return false }
+        let mtime = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec) + TimeInterval(st.st_mtimespec.tv_nsec) / 1e9)
+        return Self.isFresh(mtime: mtime)
+    }
+
+    private func tick() {
+        let want = panelOpen || watchFresh
+        if want && !sampling { sampling = true; startPowermetrics() }
+        if !want && sampling { sampling = false; endPowermetrics() }
+        if sampling { readSMC() }
+    }
+
     func start() {
         otherControl = NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.crystalidea.macsfancontrol" }
-        readSMC()
+        panelOpen = true
         readEnergy()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.readSMC() }
-        startPowermetrics()
+        tick()
     }
 
     func stop() {
-        timer?.invalidate()
+        panelOpen = false
+        tick()
+    }
+
+    private func endPowermetrics() {
         powermetrics?.terminate()
         powermetrics = nil
     }
@@ -146,7 +178,47 @@ final class Model: ObservableObject {
             let rpm = (0..<fans).map { Int(SMC.value("F\($0)Ac") ?? 0) }
             let maxOf = { (keys: [String]) in keys.compactMap(SMC.value).filter { $0 > 1 && $0 < 150 }.max() }
             let die = maxOf(dieKeys), battery = maxOf(batteryKeys)
-            DispatchQueue.main.async { self.rpm = rpm; self.die = die; self.battery = battery }
+            DispatchQueue.main.async {
+                self.rpm = rpm; self.die = die; self.battery = battery
+                self.writeReadings()
+            }
+        }
+    }
+
+    // Writes ~/.fanbar/readings.json atomically: a temp file in the same folder, then a rename over the old one.
+    private func writeReadings() {
+        guard sampling else { return }
+        func num(_ v: Double?) -> Any { v.map { ($0 * 100).rounded() / 100 } ?? NSNull() }
+        let reading: [String: Any] = [
+            "t": Int(Date().timeIntervalSince1970 * 1000),
+            "fans": (0..<fans).map { i -> [String: Any] in
+                let r = Fans.range(i)
+                return ["rpm": i < rpm.count ? rpm[i] : 0, "min": Int(r.lowerBound), "max": Int(r.upperBound)]
+            },
+            "dieTempC": num(die),
+            "batteryTempC": num(battery),
+            "cpuWatts": num(cpuW),
+            "pClusterMHz": num(pGHz.map { $0 * 1000 }),
+            "sClusterMHz": num(sGHz.map { $0 * 1000 }),
+            "thermalPressure": pressure ?? NSNull(),
+            "fanMode": modeLabel,
+        ]
+        smc.async {
+            guard let data = try? JSONSerialization.data(withJSONObject: reading, options: [.sortedKeys]) else { return }
+            let fm = FileManager.default
+            try? fm.createDirectory(at: Self.dir, withIntermediateDirectories: true)
+            let tmp = Self.dir.appendingPathComponent(".readings.json.tmp")
+            guard (try? data.write(to: tmp)) != nil else { return }
+            if rename(tmp.path, Self.readingsFile.path) != 0 { try? fm.removeItem(at: tmp) }
+        }
+    }
+
+    // What the panel shows under "Fans".
+    var modeLabel: String {
+        switch mode {
+        case "auto": "Stock (Apple's curve)"
+        case "max": "Max"
+        default: "Manual \(mode) rpm"
         }
     }
 
@@ -246,13 +318,7 @@ struct Panel: View {
         .onDisappear { model.stop() }
     }
 
-    private var modeLabel: String {
-        switch model.mode {
-        case "auto": "Stock (Apple's curve)"
-        case "max": "Max"
-        default: "Manual \(model.mode) rpm"
-        }
-    }
+    private var modeLabel: String { model.modeLabel }
 
     // Public SF Symbols, or the private ones macOS keeps for its own menus.
     private static func symbol(_ name: String) -> NSImage? {
