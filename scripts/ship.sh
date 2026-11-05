@@ -16,6 +16,7 @@ record="$root/build/stable-installed-commit"
 
 ship_check_clean
 ship_check_identity
+ship_lock
 ship_stage
 
 [[ -f Package.swift ]] || ship_fail "no Package.swift to build"
@@ -25,6 +26,7 @@ ship_icon
 ship_bundle "$exe" "$bin"
 
 ship_sign
+ship_check_requirement
 ship_install
 ship_record
 echo "ship: installed $name ${commit:0:9} at $dest_dir/$name.app"
