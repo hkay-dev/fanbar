@@ -3,6 +3,22 @@ import CSMC
 import IOKit.ps
 import SwiftUI
 
+// Fanbar Dev (bundle id ending `.dev`) only reads and shows the UI: it never changes the fans or the energy mode, so
+// launching it doesn't apply its saved mode over stable Fanbar's and quitting it doesn't reset the fans to auto.
+// Opt in to writes with FANBAR_DEV_WRITES=1 in the environment or `--allow-writes` as a launch argument.
+enum Dev {
+    static let writesAllowed: Bool = {
+        guard Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true else { return true }
+        return ProcessInfo.processInfo.environment["FANBAR_DEV_WRITES"] == "1" || CommandLine.arguments.contains("--allow-writes")
+    }()
+
+    // True when root writes may run; in Dev without the opt-in it logs the skip and returns false.
+    static func mayWrite(_ what: String) -> Bool {
+        if !writesAllowed { NSLog("Fanbar Dev: skipped %@ (no FANBAR_DEV_WRITES=1 or --allow-writes)", what) }
+        return writesAllowed
+    }
+}
+
 // `Fanbar --set auto|max|<rpm>` writes the fan keys and exits. The app runs itself that way under `sudo -n`,
 // since SMC writes need root.
 @main enum Entry {
@@ -95,11 +111,13 @@ final class Model: ObservableObject {
     }
 
     @discardableResult static func runRoot(_ mode: String) -> Process? {
-        launch("/usr/bin/sudo", ["-n", Bundle.main.executablePath!, "--set", mode])
+        guard Dev.mayWrite("fan mode \(mode)") else { return nil }
+        return launch("/usr/bin/sudo", ["-n", Bundle.main.executablePath!, "--set", mode])
     }
 
     // Sets the energy mode for the power source in use now, as System Settings does.
     func setEnergy(_ mode: Int) {
+        guard Dev.mayWrite("energy mode \(mode)") else { return }
         energy = mode
         let source = IOPSGetProvidingPowerSourceType(nil).takeUnretainedValue() as String == kIOPMBatteryPowerKey ? "-b" : "-c"
         DispatchQueue.global().async {
